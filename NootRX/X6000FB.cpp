@@ -61,10 +61,18 @@ bool X6000FB::processKext(KernelPatcher &patcher, size_t id, mach_vm_address_t s
                 "Failed to route getEnumeratedRevisionNumber");
         }
 
+        // Checkpoint (always on): route AmdLogger init unconditionally so a
+        // hang before Display Core runs is still visible as a missing
+        // checkpoint, independent of the -liludbg debug gate.
+        {
+            RouteRequestPlus request {"__ZN24AMDRadeonX6000_AmdLogger15initWithPciInfoEP11IOPCIDevice",
+                wrapInitWithPciInfo, this->orgInitWithPciInfo};
+            PANIC_COND(!request.route(patcher, id, slide, size), "X6000FB",
+                "Failed to route AmdLogger init");
+        }
+
         if (ADDPR(debugEnabled)) {
             RouteRequestPlus requests[] = {
-                {"__ZN24AMDRadeonX6000_AmdLogger15initWithPciInfoEP11IOPCIDevice", wrapInitWithPciInfo,
-                    this->orgInitWithPciInfo},
                 {"__ZN34AMDRadeonX6000_AmdRadeonController10doGPUPanicEPKcz", wrapDoGPUPanic},
                 {"_dm_logger_write", wrapDmLoggerWrite, kDmLoggerWritePattern},
             };
@@ -83,6 +91,7 @@ bool X6000FB::processKext(KernelPatcher &patcher, size_t id, mach_vm_address_t s
         orgAsicCapsTable[0].caps = ddiCapsNavi2Universal;
         MachInfo::setKernelWriting(false, KernelPatcher::kernelWriteLock);
         DBGLOG("X6000FB", "Applied DDI Caps patches");
+        kprintf("NootRX-CKPT: X6000FB caps patched (framebuffer kext loaded)\n");
 
         if (ADDPR(debugEnabled)) {
             auto *logEnableMaskMinors =
@@ -124,9 +133,11 @@ bool X6000FB::processKext(KernelPatcher &patcher, size_t id, mach_vm_address_t s
 UInt32 X6000FB::wrapGetEnumeratedRevision(void *) { return NootRXMain::callback->enumRevision; }
 
 bool X6000FB::wrapInitWithPciInfo(void *that, void *pciDevice) {
+    kprintf("NootRX-CKPT: AmdLogger::initWithPciInfo enter\n");
     auto ret = FunctionCast(wrapInitWithPciInfo, callback->orgInitWithPciInfo)(that, pciDevice);
     getMember<UInt64>(that, 0x28) = 0xFFFFFFFFFFFFFFFF;    // Enable all log types
     getMember<UInt32>(that, 0x30) = 0xFF;                  // Enable all log severities
+    kprintf("NootRX-CKPT: AmdLogger::initWithPciInfo done\n");
     return ret;
 }
 
